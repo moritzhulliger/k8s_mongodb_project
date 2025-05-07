@@ -1,0 +1,75 @@
+version: '3.8'
+
+services:
+  mongo1:
+    image: mongo:latest
+    container_name: mongo1
+    ports:
+      - 27017:27017
+    volumes:
+      - mongo1-data:/data/db
+      - ./.keyfile:/data/mongo-keyfile:ro
+    networks:
+      - mongo-net
+    command: >
+      mongod --replSet rs0 --keyFile /data/mongo-keyfile
+
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: root
+      MONGO_INITDB_ROOT_PASSWORD: example
+
+  mongo2:
+    image: mongo:latest
+    container_name: mongo2
+    volumes:
+      - mongo2-data:/data/db
+      - ./.keyfile:/data/mongo-keyfile:ro
+    networks:
+      - mongo-net
+    command: >
+      mongod --replSet rs0 --keyFile /data/mongo-keyfile
+
+  mongo3:
+    image: mongo:latest
+    container_name: mongo3
+    volumes:
+      - mongo3-data:/data/db
+      - ./.keyfile:/data/mongo-keyfile:ro
+    networks:
+      - mongo-net
+    command: >
+      mongod --replSet rs0 --keyFile /data/mongo-keyfile
+
+  mongo-init:
+    image: mongo:6.0
+    container_name: mongo-init
+    depends_on:
+      - mongo1
+      - mongo2
+      - mongo3
+    networks:
+      - mongo-net
+    volumes:
+      - ./init-replica.sh:/init-replica.sh:ro
+    entrypoint: ["bash", "/init-replica.sh"]
+
+  web:
+    build: ./web
+    container_name: node-app
+    depends_on:
+      - mongo1
+    networks:
+      - mongo-net
+    ports:
+      - 3000:3000
+    environment:
+      - MONGO_URL=mongodb://root:example@mongo1:27017,mongo2:27017,mongo3:27017/?replicaSet=rs0&authSource=admin
+
+volumes:
+  mongo1-data:
+  mongo2-data:
+  mongo3-data:
+
+networks:
+  mongo-net:
+    driver: bridge

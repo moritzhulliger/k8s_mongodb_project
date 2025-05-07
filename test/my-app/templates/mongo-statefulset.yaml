@@ -1,0 +1,152 @@
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: mongo
+  labels:
+    app: mongo
+spec:
+  serviceName: "mongo-headless"
+  replicas: 3
+  selector:
+    matchLabels:
+      app: mongo
+  template:
+    metadata:
+      labels:
+        app: mongo
+    spec:
+      serviceAccountName: {{ .Values.serviceAccount.name }}
+      terminationGracePeriodSeconds: 10
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - mongo
+              topologyKey: "kubernetes.io/hostname"
+      containers:
+      - name: mongo
+        image: {{ .Values.mongodb.image }}
+        command:
+        - bash
+        - -c
+        - |
+          set -e
+          # Ensure proper permissions for keyfile
+          cp /etc/mongodb-secrets/keyfile /data/keyfile
+          chmod 600 /data/keyfile
+          
+          # Start MongoDB with replication
+          mongod --replSet={{ .Values.mongodb.replicaSet }} \
+                 --keyFile=/data/keyfile \
+                 --bind_ip_all \
+                 --port={{ .Values.mongodb.port }} \
+                 --dbpath=/data/db
+        ports:
+        - containerPort: {{ .Values.mongodb.port }}
+          name: mongodb
+        volumeMounts:
+        - name: datadir
+          mountPath: /data/db
+        - name: mongodb-secrets
+          mountPath: /etc/mongodb-secrets
+          readOnly: true
+        - name: config
+          mountPath: /config
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: root-username
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: root-password
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        resources:
+          requests:
+            cpu: 200m
+            memory: 256Mi
+          limits:
+            cpu: 500m
+            memory: 512Mi
+      - name: mongo-sidecar
+        image: busybox
+        command: 
+        - /bin/sh
+        - -c
+        - |
+          # Wait for mongod to start
+          until wget -qO- --timeout=2 http://localhost:{{ .Values.mongodb.port }} > /dev/null 2>&1; do
+            echo "Waiting for MongoDB to start..."
+            sleep 2
+          done
+          
+          # Only initialize from the first pod
+          if [ "$POD_NAME" = "mongo-0" ]; then
+            echo "Initializing replica set..."
+            sleep 10
+            mongosh --host localhost --port {{ .Values.mongodb.port }} \
+              -u $MONGO_INITDB_ROOT_USERNAME \
+              -p $MONGO_INITDB_ROOT_PASSWORD \
+              --authenticationDatabase admin \
+              /config/init-replicaset.js
+            
+            # Initialize sharding on the primary
+            echo "Initializing sharding..."
+            sleep 10
+            mongosh --host localhost --port {{ .Values.mongodb.port }} \
+              -u $MONGO_INITDB_ROOT_USERNAME \
+              -p $MONGO_INITDB_ROOT_PASSWORD \
+              --authenticationDatabase admin \
+              /config/init-shard.js
+          fi
+          
+          # Keep the sidecar running
+          echo "Setup complete. Sidecar staying alive for debugging."
+          tail -f /dev/null
+        env:
+        - name: MONGO_INITDB_ROOT_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: root-username
+        - name: MONGO_INITDB_ROOT_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: mongodb-secret
+              key: root-password
+        - name: POD_NAME
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        volumeMounts:
+        - name: config
+          mountPath: /config
+      volumes:
+      - name: mongodb-secrets
+        secret:
+          secretName: mongodb-secret
+          defaultMode: 0400
+      - name: config
+        configMap:
+          name: mongodb-config
+  volumeClaimTemplates:
+  - metadata:
+      name: datadir
+    spec:
+      accessModes: [ "ReadWriteOnce" ]
+      resources:
+        requests:
+          storage: 1Gi
+
