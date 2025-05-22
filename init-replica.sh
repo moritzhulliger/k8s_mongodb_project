@@ -39,9 +39,6 @@ done
 echo "⚙️ Initiating replica set..."
 
 mongosh --host mongo1 --username root --password example --authenticationDatabase admin <<EOF
-try {
-  const status = rs.status();
-  if (status.ok !== 1) {
     rs.initiate({
       _id: "rs0",
       members: [
@@ -50,19 +47,4 @@ try {
         { _id: 2, host: "mongo3:27017" }
       ]
     });
-    print("Replica set initiated.");
-  } else {
-    print("Replica set already initiated.");
-  }
-} catch (e) {
-  print("Replica set not initiated yet, initiating now.");
-  rs.initiate({
-    _id: "rs0",
-    members: [
-      { _id: 0, host: "mongo1:27017" },
-      { _id: 1, host: "mongo2:27017" },
-      { _id: 2, host: "mongo3:27017" }
-    ]
-  });
-}
 EOF
